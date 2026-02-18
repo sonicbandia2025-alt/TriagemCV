@@ -1,0 +1,5 @@
+{
+  "name": "Triagem Inteligente de Currículos",
+  "description": "Sistema de análise de currículos automatizado por IA para classificar candidatos com base em requisitos de vagas.",
+  "requestFramePermissions": []
+}
