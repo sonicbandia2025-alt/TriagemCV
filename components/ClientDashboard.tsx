@@ -3,7 +3,7 @@ import { Header } from './Header';
 import { JobForm } from './JobForm';
 import { FileUpload } from './FileUpload';
 import { AnalysisResultCard } from './AnalysisResultCard';
-import { JobConfig, CandidateFile, AnalysisStatus, User, Recommendation } from '../types';
+import { JobConfig, CandidateFile, AnalysisStatus, User } from '../types';
 import { analyzeResumeWithGemini } from '../services/geminiService';
 import { getUserData, incrementUserUsage, saveAnalysisResult } from '../services/databaseService';
 import { Play, Loader2, Crown, RefreshCcw, Trash2, AlertTriangle, CheckCircle2 } from 'lucide-react';
@@ -13,21 +13,24 @@ interface ClientDashboardProps {
   onLogout: () => void;
 }
 
+// Robust MimeType detection
 const getMimeType = (file: File): string => {
   if (file.type && file.type !== '') return file.type;
   const ext = file.name.split('.').pop()?.toLowerCase();
   if (ext === 'pdf') return 'application/pdf';
   if (ext === 'png') return 'image/png';
   if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
-  return 'application/pdf'; 
+  return 'application/pdf'; // Default fallback for resume
 };
 
+// Helper to convert file to Base64
 const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
     reader.onload = () => {
       const result = reader.result as string;
+      // Extract pure Base64
       const base64 = result.includes(',') ? result.split(',')[1] : result;
       resolve(base64);
     };
@@ -36,12 +39,16 @@ const fileToBase64 = (file: File): Promise<string> => {
 };
 
 export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, onLogout }) => {
+  // State
   const [jobConfig, setJobConfig] = useState<JobConfig>({ title: '', requirements: '' });
   const [files, setFiles] = useState<CandidateFile[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  
+  // Credits State
   const [usageCount, setUsageCount] = useState(currentUser.usageCount || 0);
   const [maxCredits, setMaxCredits] = useState(currentUser.maxCredits || 3);
 
+  // Sync latest credits on mount
   useEffect(() => {
     if (currentUser.uid) {
       getUserData(currentUser.uid).then(data => {
@@ -53,6 +60,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, o
     }
   }, [currentUser.uid]);
 
+  // Handlers
   const handleFilesAdded = useCallback(async (newFiles: File[]) => {
     const processedFiles: CandidateFile[] = [];
     for (const file of newFiles) {
@@ -107,17 +115,22 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, o
     }
 
     setIsAnalyzing(true);
+    // Initialize current usage from state
     let currentUsage = usageCount;
 
+    // Process files sequentially to handle state updates cleanly
     for (const file of pendingFiles) {
+      // Check limits before each file
       if (currentUsage >= maxCredits) {
         alert("Créditos esgotados durante o processamento.");
         break; 
       }
 
+      // 1. Set Status to Analyzing
       setFiles(prev => prev.map(f => f.id === file.id ? { ...f, status: AnalysisStatus.ANALYZING } : f));
 
       try {
+        // 2. Call AI
         const result = await analyzeResumeWithGemini(
           file.base64,
           file.mimeType,
@@ -125,32 +138,31 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, o
           jobConfig.requirements
         );
 
-        // UPDATE UI IMMEDIATELY - No blocking by database
+        // 3. Update DB
+        if (currentUser.uid) {
+          // Save analysis result (fire & forget)
+          saveAnalysisResult(currentUser.uid, file.file.name, jobConfig.title, result).catch(console.error);
+          
+          // Increment usage - AWAIT this to ensure DB sync before proceeding
+          // This fixes the issue where credits reset on reload because the update was lost
+          const newCount = await incrementUserUsage(currentUser.uid);
+          setUsageCount(newCount);
+          currentUsage = newCount; 
+        }
+
+        // 4. Update UI Success
         setFiles(prev => prev.map(f => 
           f.id === file.id ? { ...f, status: AnalysisStatus.COMPLETED, result } : f
         ));
 
-        // Sync usage and result in background
-        if (currentUser.uid) {
-          saveAnalysisResult(currentUser.uid, file.file.name, jobConfig.title, result).catch(console.error);
-          
-          // Non-blocking credit decrement
-          incrementUserUsage(currentUser.uid).then(newCount => {
-            setUsageCount(newCount);
-          }).catch(console.error);
-          
-          // Optimistic local update
-          currentUsage++;
-          setUsageCount(prev => prev + 1);
-        }
-
       } catch (error: any) {
         console.error("Analysis failed for", file.file.name, error);
+        // 5. Update UI Error
         setFiles(prev => prev.map(f => 
           f.id === file.id ? { 
             ...f, 
             status: AnalysisStatus.ERROR, 
-            errorMessage: error.message || "Erro desconhecido." 
+            errorMessage: error.message || "Erro desconhecido. Verifique o arquivo." 
           } : f
         ));
       }
@@ -159,8 +171,9 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, o
     setIsAnalyzing(false);
   };
 
+  // Derived State
   const completedCount = files.filter(f => f.status === AnalysisStatus.COMPLETED).length;
-  const interviewCount = files.filter(f => f.result?.recommendation === Recommendation.INTERVIEW).length;
+  const interviewCount = files.filter(f => f.result?.recommendation === 'INTERVIEW').length;
   const hasPending = files.some(f => f.status === AnalysisStatus.IDLE || f.status === AnalysisStatus.ERROR);
 
   return (
@@ -168,6 +181,8 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, o
       <Header user={currentUser} onLogout={onLogout} />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        
+        {/* Banner Credits */}
         <div className="bg-slate-900/50 border border-slate-800 rounded-lg p-4 mb-8 flex flex-wrap justify-between items-center gap-4">
           <div className="flex items-center gap-3">
              <div className="bg-blue-900/30 p-2 rounded-full text-blue-400">
@@ -188,15 +203,26 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, o
           </div>
         </div>
 
+        {/* Input Section */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
           <div className="lg:col-span-8 space-y-6">
-            <JobForm config={jobConfig} onChange={setJobConfig} disabled={isAnalyzing} />
+            <JobForm 
+              config={jobConfig} 
+              onChange={setJobConfig} 
+              disabled={isAnalyzing} 
+            />
           </div>
           <div className="lg:col-span-4 flex flex-col h-full">
-            <FileUpload files={files} onFilesAdded={handleFilesAdded} onRemoveFile={removeFile} disabled={isAnalyzing} />
+            <FileUpload 
+              files={files} 
+              onFilesAdded={handleFilesAdded} 
+              onRemoveFile={removeFile} 
+              disabled={isAnalyzing}
+            />
           </div>
         </div>
 
+        {/* Controls Bar */}
         <div className="sticky top-16 z-30 bg-slate-950/90 backdrop-blur border-y border-slate-800 py-4 mb-8">
            <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
               <div>
@@ -211,7 +237,11 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, o
 
               <div className="flex items-center gap-3 w-full sm:w-auto">
                 {files.length > 0 && (
-                  <button onClick={clearAll} disabled={isAnalyzing} className="px-4 py-2 text-slate-400 hover:text-red-400 hover:bg-red-900/10 rounded-lg transition-colors border border-transparent hover:border-red-900/20 text-sm flex items-center gap-2">
+                  <button 
+                    onClick={clearAll}
+                    disabled={isAnalyzing}
+                    className="px-4 py-2 text-slate-400 hover:text-red-400 hover:bg-red-900/10 rounded-lg transition-colors border border-transparent hover:border-red-900/20 text-sm flex items-center gap-2"
+                  >
                     <Trash2 className="w-4 h-4" /> Limpar
                   </button>
                 )}
@@ -219,14 +249,37 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, o
                 <button
                   onClick={runAnalysis}
                   disabled={isAnalyzing || !hasPending || usageCount >= maxCredits}
-                  className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg font-semibold shadow-lg transition-all ${isAnalyzing || !hasPending || usageCount >= maxCredits ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700' : 'bg-blue-600 hover:bg-blue-500 text-white hover:scale-105 active:scale-95 shadow-blue-900/20'}`}
+                  className={`
+                    flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg font-semibold shadow-lg transition-all
+                    ${isAnalyzing || !hasPending || usageCount >= maxCredits
+                      ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700' 
+                      : 'bg-blue-600 hover:bg-blue-500 text-white hover:scale-105 active:scale-95 shadow-blue-900/20'
+                    }
+                  `}
                 >
-                  {isAnalyzing ? <><Loader2 className="w-5 h-5 animate-spin" /> Processando...</> : usageCount >= maxCredits ? <><AlertTriangle className="w-5 h-5" /> Sem Créditos</> : !hasPending && files.length > 0 ? <><CheckCircle2 className="w-5 h-5" /> Concluído</> : <><Play className="w-5 h-5 fill-current" /> Iniciar Triagem</>}
+                  {isAnalyzing ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" /> Processando...
+                    </>
+                  ) : usageCount >= maxCredits ? (
+                    <>
+                       <AlertTriangle className="w-5 h-5" /> Sem Créditos
+                    </>
+                  ) : !hasPending && files.length > 0 ? (
+                    <>
+                       <CheckCircle2 className="w-5 h-5" /> Concluído
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-5 h-5 fill-current" /> Iniciar Triagem
+                    </>
+                  )}
                 </button>
               </div>
            </div>
         </div>
 
+        {/* Results Area */}
         <div className="space-y-4 min-h-[300px]">
           {files.length === 0 ? (
              <div className="h-64 flex flex-col items-center justify-center text-slate-500 border-2 border-dashed border-slate-800 rounded-2xl bg-slate-900/30">
@@ -236,7 +289,10 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, o
           ) : (
             files.map(file => (
                <div key={file.id} className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  {file.status === AnalysisStatus.COMPLETED && <AnalysisResultCard candidate={file} />}
+                  {file.status === AnalysisStatus.COMPLETED && (
+                    <AnalysisResultCard candidate={file} />
+                  )}
+                  
                   {file.status === AnalysisStatus.ANALYZING && (
                     <div className="bg-slate-900 border border-blue-900/30 p-6 rounded-xl flex items-center gap-4 relative overflow-hidden">
                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-blue-900/10 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }}></div>
@@ -247,6 +303,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, o
                        </div>
                     </div>
                   )}
+
                   {file.status === AnalysisStatus.ERROR && (
                     <div className="bg-red-950/20 border border-red-900/50 p-4 rounded-xl flex justify-between items-center">
                        <div className="flex items-center gap-3">
@@ -256,9 +313,12 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, o
                             <p className="text-xs text-red-500/70">{file.errorMessage}</p>
                           </div>
                        </div>
-                       <button onClick={() => removeFile(file.id)} className="text-red-400 hover:text-white text-sm underline">Remover</button>
+                       <button onClick={() => removeFile(file.id)} className="text-red-400 hover:text-white text-sm underline">
+                          Remover
+                       </button>
                     </div>
                   )}
+
                   {file.status === AnalysisStatus.IDLE && (
                     <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/50 flex justify-between items-center opacity-60">
                        <span className="text-slate-400">{file.file.name}</span>
@@ -269,6 +329,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, o
             ))
           )}
         </div>
+
       </main>
     </div>
   );

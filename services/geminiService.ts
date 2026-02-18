@@ -1,8 +1,7 @@
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { AnalysisResult, Recommendation } from "../types";
 
-// Guideline: The API key must be obtained exclusively from the environment variable process.env.API_KEY.
-// Note: 'process.env.API_KEY' is replaced by a string literal at build time via vite.config.ts
+// Access API key exclusively from process.env.API_KEY as per guidelines.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 // We manually parse JSON to avoid model hanging on strict schema generation for large PDFs
@@ -13,11 +12,6 @@ export const analyzeResumeWithGemini = async (
   requirements: string
 ): Promise<AnalysisResult> => {
   
-  // Safe check for the replaced value
-  if (!process.env.API_KEY || process.env.API_KEY === 'undefined' || process.env.API_KEY === '') {
-      throw new Error("Chave de API (VITE_API_KEY) não configurada no ambiente.");
-  }
-
   // Prompt instructions updated to request Portuguese output while keeping JSON structure
   const prompt = `
     Atue como um recrutador especialista e experiente.
@@ -45,12 +39,12 @@ export const analyzeResumeWithGemini = async (
 
   try {
     // Implement a 60-second timeout race
-    const timeoutPromise = new Promise<never>((_, reject) => 
+    const timeoutPromise = new Promise((_, reject) => 
         setTimeout(() => reject(new Error("Tempo limite de análise excedido (60s). O arquivo pode ser muito grande ou complexo.")), 60000)
     );
 
     const apiCallPromise = ai.models.generateContent({
-      model: "gemini-3-pro-preview", 
+      model: "gemini-3-flash-preview", 
       contents: {
         parts: [
           {
@@ -72,7 +66,7 @@ export const analyzeResumeWithGemini = async (
       },
     });
 
-    const response = await Promise.race([apiCallPromise, timeoutPromise]) as GenerateContentResponse;
+    const response: any = await Promise.race([apiCallPromise, timeoutPromise]);
 
     let textResponse = response.text;
     if (!textResponse) {
