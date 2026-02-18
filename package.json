@@ -1,7 +1,7 @@
 {
   "name": "triagem-cv-app",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -25,5 +25,8 @@
     "tailwindcss": "^3.4.0",
     "typescript": "^5.2.2",
     "vite": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
