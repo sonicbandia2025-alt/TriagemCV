@@ -50,7 +50,7 @@ export const analyzeResumeWithGemini = async (
     );
 
     const apiCallPromise = ai.models.generateContent({
-      model: "gemini-3-flash-preview", 
+      model: "gemini-3-pro-preview", 
       contents: {
         parts: [
           {
